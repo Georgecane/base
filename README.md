@@ -1,2 +1,2 @@
 # base
-a dynamic and fast programming language for AI development in python made with JAX and numba and ply
+a dynamic and fast programming language for AI development in python made with JAX and numba
