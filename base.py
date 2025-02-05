@@ -21,6 +21,8 @@ import torch.multiprocessing as tmp
 import torch.nn as tnn
 import requests
 import zipfile
+import numpy as np
+from typing import Any
 
 class BaseManager:
     def __init__(self):
@@ -201,3 +203,183 @@ class BasePackageManager:
                 dep_repo_url = f"https://github.com/user/{dep_name}"
                 self.install_package(dep_name, dep_repo_url)
             self.dependency_graph.add_edge(package_info['name'], dep_name)
+
+class TypeErrorBase(Exception):
+    pass
+
+class SyntaxErrorBase(Exception):
+    pass
+
+class BaseInterpreter:
+    def __init__(self):
+        self.variables = {}  # Store variable values
+        self.variable_types = {}  # Store variable type information
+        self.type_system = {
+            'int': int,
+            'str': str,
+            'float': float,
+            'double': float,
+            'list': list,
+            'dict': dict,
+            'tuple': tuple,
+            'tensor': jnp.ndarray,
+            'narray': np.ndarray,
+            'mat': np.ndarray,
+            'graph': dict,
+            'bool': bool
+        }
+
+    def parse_value(self, value_str: str, type_name: str = None) -> Any:
+        try:
+            if type_name == 'int':
+                return int(value_str)
+            elif type_name == 'str':
+                return value_str.strip('"\'')
+            elif type_name in ['float', 'double']:
+                return float(value_str)
+            elif type_name == 'bool':
+                return value_str.lower() == 'true'
+            elif type_name == 'list':
+                return eval(value_str)
+            elif type_name == 'dict':
+                return eval(value_str)
+            elif type_name == 'tuple':
+                return eval(value_str)
+            elif type_name == 'tensor':
+                return jnp.array(eval(value_str))
+            elif type_name == 'narray':
+                return np.array(eval(value_str))
+            elif type_name == 'mat':
+                return np.array(eval(value_str))
+            elif type_name == 'graph':
+                return eval(value_str)
+            elif type_name is None:  # Query-Based type system
+                try:
+                    return eval(value_str)
+                except:
+                    return value_str
+            else:
+                raise TypeErrorBase(f"Unknown type: {type_name}")
+        except Exception as e:
+            raise TypeErrorBase(f"Error converting to {type_name}: {str(e)}")
+
+    def infer_type(self, value: Any) -> str:
+        """Infer type for Query-Based system"""
+        if isinstance(value, int):
+            return 'int'
+        elif isinstance(value, str):
+            return 'str'
+        elif isinstance(value, float):
+            return 'float'
+        elif isinstance(value, bool):
+            return 'bool'
+        elif isinstance(value, list):
+            return 'list'
+        elif isinstance(value, dict):
+            return 'graph' if all(isinstance(v, list) for v in value.values()) else 'dict'
+        elif isinstance(value, tuple):
+            return 'tuple'
+        elif isinstance(value, jnp.ndarray):
+            return 'tensor'
+        elif isinstance(value, np.ndarray):
+            return 'mat' if len(value.shape) == 2 else 'narray'
+        raise TypeErrorBase(f"Cannot infer type for value: {value}")
+
+    def parse_line(self, line: str, line_number: int):
+        line = line.strip()
+        if not line or line.startswith('#'):
+            return None
+
+        # Regular type system
+        regular_match = re.match(r'var\s+(\w+)\s*:\s*(\w+)\s*=\s*(.+);', line)
+        # Dependent type system
+        dependent_match = re.match(r'var\s+(\w+)\s*:\s*dependent\s+(\w+)\s*=\s*(.+);', line)
+        # Independent type system
+        independent_match = re.match(r'var\s+(\w+)\s*:\s*independent\s*=\s*(.+);', line)
+        # Query-Based type system
+        query_match = re.match(r'var\s+(\w+)\s*=\s*(.+);', line)
+
+        try:
+            if regular_match:
+                name, type_hint, value = regular_match.groups()
+                evaluated_value = self.parse_value(value.strip(), type_hint)
+                if not isinstance(evaluated_value, self.type_system[type_hint]):
+                    raise TypeErrorBase(f"Type mismatch: expected {type_hint}")
+                self.variables[name] = evaluated_value
+                self.variable_types[name] = ('regular', type_hint)
+                
+            elif dependent_match:
+                name, type_hint, value = dependent_match.groups()
+                evaluated_value = self.parse_value(value.strip(), type_hint)
+                if not isinstance(evaluated_value, self.type_system[type_hint]):
+                    raise TypeErrorBase(f"Type mismatch: expected {type_hint}")
+                self.variables[name] = evaluated_value
+                self.variable_types[name] = ('dependent', type_hint)
+                
+            elif independent_match:
+                name, value = independent_match.groups()
+                evaluated_value = self.parse_value(value.strip())
+                self.variables[name] = evaluated_value
+                self.variable_types[name] = ('independent', None)
+                
+            elif query_match:
+                name, expression = query_match.groups()
+                if any(op in expression for op in ['+', '-', '*', '/']):
+                    parts = re.split(r'(\+|-|\*|/)', expression.strip())
+                    left = parts[0].strip()
+                    operator = parts[1].strip()
+                    right = parts[2].strip()
+
+                    left_val = self.variables.get(left, self.parse_value(left))
+                    right_val = self.variables.get(right, self.parse_value(right))
+
+                    if type(left_val) != type(right_val):
+                        raise TypeErrorBase(f"Cannot perform operation between {type(left_val).__name__} and {type(right_val).__name__}")
+
+                    result = eval(f"{left_val} {operator} {right_val}")
+                    self.variables[name] = result
+                    self.variable_types[name] = ('query', self.infer_type(result))
+                else:
+                    evaluated_value = self.parse_value(expression.strip())
+                    self.variables[name] = evaluated_value
+                    self.variable_types[name] = ('query', self.infer_type(evaluated_value))
+            else:
+                raise SyntaxErrorBase("Invalid variable declaration")
+
+            return f"Defined {name} = {self.variables[name]}"
+            
+        except (TypeErrorBase, SyntaxErrorBase) as e:
+            raise
+        except Exception as e:
+            raise SyntaxErrorBase(f"Invalid syntax: {str(e)}")
+
+    def run_file(self, file_path: str):
+        try:
+            if not file_path.endswith('.base'):
+                raise SyntaxErrorBase("File must have .base extension")
+
+            with open(file_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            results = []
+            for i, line in enumerate(lines, 1):
+                try:
+                    result = self.parse_line(line, i)
+                    if result:
+                        results.append(f"Line {i}: {result}")
+                except (TypeErrorBase, SyntaxErrorBase) as e:
+                    results.append(f"Error at line {i}: {str(e)}")
+            return results
+                
+        except Exception as e:
+            return [f"Error:", {str(e)}]
+
+def main():
+    interpreter = BaseInterpreter()
+    file = str(input("File > "))
+    results = interpreter.run_file(file)
+    for result in results:
+        print(result)
+        
+if __name__ == "__main__":
+    main()
