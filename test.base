@@ -1,0 +1,9 @@
+a = 10;
+pr a;
+func hello_world - : pr "hello world!"; . end
+b = io ">";
+pr b;
+ls
+a = 0.001;
+ty a;
+if 1 == 1 : pr True; - else : pr False; . end
