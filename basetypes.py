@@ -2,6 +2,7 @@ import jax.numpy as jnp
 import torch
 import networkx as nx
 from typing import Any
+from ctypes import c_double
 
 class BaseType:
     """
@@ -26,8 +27,8 @@ class FloatType(BaseType):
         super().__init__(value)
 
 class DoubleType(BaseType):
-    def __init__(self, value: float):
-        if not isinstance(value, float):
+    def __init__(self, value: c_double):
+        if not isinstance(value, c_double):
             raise TypeError("Expected a double (float)")
         super().__init__(value)
 
